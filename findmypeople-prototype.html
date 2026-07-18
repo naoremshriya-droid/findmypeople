@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FindMyPeople AI</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0A0F1A">
+<!-- iOS install support: Safari ignores manifest.json, needs these explicitly -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FindMyPeople">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0A0F1A;
+    --surface:#121A2B;
+    --surface-2:#1B2540;
+    --border:#2A3752;
+    --text:#E8ECF2;
+    --text-muted:#8B96A8;
+    --accent-safe:#2DD4BF;
+    --accent-safe-dim:#1B4B47;
+    --accent-alert:#FF4757;
+    --accent-alert-dim:#4A1B22;
+    --accent-warn:#FFB020;
+    --glow:#5EEAD4;
+    --radius:18px;
+    --font-display:'Space Grotesk',sans-serif;
+    --font-body:'Inter',sans-serif;
+    --font-mono:'JetBrains Mono',monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(circle at 20% 0%, rgba(45,212,191,0.08), transparent 45%),
+      radial-gradient(circle at 80% 100%, rgba(255,71,87,0.06), transparent 40%),
+      var(--bg);
+    font-family:var(--font-body);
+    color:var(--text);
+    min-height:100vh;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:32px 16px;
+  }
+  .stage{ display:flex; gap:28px; align-items:flex-start; flex-wrap:wrap; justify-content:center; }
+  .intro{ max-width:280px; padding-top:18px; }
+  .intro .eyebrow{ font-family:var(--font-mono); font-size:11px; letter-spacing:0.12em; color:var(--accent-safe); text-transform:uppercase; }
+  .intro h1{ font-family:var(--font-display); font-size:26px; line-height:1.15; margin:10px 0 12px; }
+  .intro p{ font-size:13.5px; color:var(--text-muted); line-height:1.55; margin-bottom:10px; }
+
+  .phone{
+    width:380px;
+    height:760px;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:44px;
+    padding:14px;
+    box-shadow:0 30px 80px -20px rgba(0,0,0,0.7), inset 0 0 0 1px rgba(255,255,255,0.02);
+    position:relative;
+  }
+  .screen{
+    width:100%; height:100%;
+    background:var(--bg);
+    border-radius:32px;
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+    position:relative;
+  }
+  .statusbar{ display:flex; justify-content:space-between; align-items:center; padding:14px 20px 6px; font-family:var(--font-mono); font-size:11px; color:var(--text-muted); }
+  .netbadge{ display:flex; align-items:center; gap:6px; }
+  .netdot{ width:6px; height:6px; border-radius:50%; background:var(--accent-safe); box-shadow:0 0 8px var(--accent-safe); }
+  .netbadge.offline .netdot{ background:var(--accent-warn); box-shadow:0 0 8px var(--accent-warn); }
+
+  .topbar{ padding:6px 20px 14px; display:flex; align-items:center; justify-content:space-between; }
+  .topbar h2{ font-family:var(--font-display); font-size:19px; font-weight:600; }
+  .grouptag{ font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); }
+
+  .content{ flex:1; overflow-y:auto; padding:0 20px 16px; }
+  .content::-webkit-scrollbar{ display:none; }
+
+  /* ---- Onboarding ---- */
+  .card{ background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); padding:18px; margin-bottom:14px; }
+  .qr-wrap{ display:flex; flex-direction:column; align-items:center; padding:22px 18px; }
+  .qr{
+    width:150px; height:150px; background:#fff; border-radius:10px;
+    display:grid; grid-template-columns:repeat(9,1fr); grid-template-rows:repeat(9,1fr); padding:10px; gap:2px;
+  }
+  .qr div{ background:#0A0F1A; border-radius:1px; }
+  .qr div.off{ background:transparent; }
+  .qr-caption{ font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:12px; text-align:center; }
+  .btn{
+    font-family:var(--font-display); font-weight:600; font-size:14px;
+    border:none; border-radius:14px; padding:14px 18px; cursor:pointer;
+    width:100%; display:flex; align-items:center; justify-content:center; gap:8px;
+    transition:transform .12s ease, filter .12s ease;
+  }
+  .btn:active{ transform:scale(0.98); }
+  .btn-primary{ background:var(--accent-safe); color:#04211D; }
+  .btn-primary:hover{ filter:brightness(1.08); }
+  .btn-ghost{ background:transparent; color:var(--text); border:1px solid var(--border); }
+  .btn-ghost:hover{ border-color:var(--accent-safe); }
+
+  .member-row{ display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); }
+  .member-row:last-child{ border-bottom:none; }
+  .avatar{ width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:600; font-size:13px; color:#04211D; background:var(--accent-safe); flex-shrink:0; }
+  .member-meta{ flex:1; }
+  .member-meta .name{ font-size:13.5px; font-weight:600; }
+  .member-meta .sub{ font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); }
+  .battery{ font-family:var(--font-mono); font-size:11px; color:var(--text-muted); }
+
+  /* ---- Map screen ---- */
+  .map-wrap{ position:relative; border-radius:var(--radius); overflow:hidden; background:var(--surface-2); border:1px solid var(--border); margin-bottom:14px; }
+  svg{ display:block; width:100%; height:auto; }
+  .pin-label{ font-family:var(--font-mono); font-size:8px; fill:var(--text); }
+  .readout{ font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px dashed var(--border); }
+  .readout:last-child{ border-bottom:none; }
+  .readout b{ color:var(--text); font-weight:500; }
+
+  /* ---- SOS ---- */
+  .sos-dock{ position:absolute; bottom:82px; left:0; right:0; display:flex; justify-content:center; z-index:5; }
+  .sos-btn{
+    width:74px; height:74px; border-radius:50%; border:none; cursor:pointer;
+    background:var(--accent-alert); color:#fff; font-family:var(--font-display); font-weight:700; font-size:11px;
+    display:flex; align-items:center; justify-content:center; text-align:center; line-height:1.2;
+    box-shadow:0 8px 24px -6px rgba(255,71,87,0.6);
+    position:relative;
+  }
+  .sos-btn::before, .sos-btn::after{
+    content:''; position:absolute; inset:0; border-radius:50%; border:1.5px solid var(--accent-alert);
+    animation:sonar 2.2s ease-out infinite;
+  }
+  .sos-btn::after{ animation-delay:1.1s; }
+  @keyframes sonar{ 0%{ transform:scale(1); opacity:0.7;} 100%{ transform:scale(2.4); opacity:0; } }
+
+  .nav{ display:flex; border-top:1px solid var(--border); background:var(--surface); padding:10px 10px 16px; }
+  .nav button{ flex:1; background:none; border:none; color:var(--text-muted); font-family:var(--font-mono); font-size:10px; display:flex; flex-direction:column; align-items:center; gap:4px; cursor:pointer; }
+  .nav button.active{ color:var(--accent-safe); }
+  .nav svg{ width:18px; height:18px; }
+
+  .modal-backdrop{ position:absolute; inset:0; background:rgba(6,10,18,0.7); backdrop-filter:blur(2px); display:flex; align-items:flex-end; z-index:20; opacity:0; pointer-events:none; transition:opacity .2s ease; }
+  .modal-backdrop.show{ opacity:1; pointer-events:auto; }
+  .modal{ background:var(--surface); border-top:1px solid var(--border); border-radius:24px 24px 0 0; padding:24px 20px 28px; width:100%; transform:translateY(20px); transition:transform .2s ease; }
+  .modal-backdrop.show .modal{ transform:translateY(0); }
+  .modal h3{ font-family:var(--font-display); font-size:17px; margin-bottom:6px; }
+  .modal p{ font-size:12.5px; color:var(--text-muted); margin-bottom:18px; line-height:1.5; }
+  .modal .row{ display:flex; gap:10px; }
+
+  .alert-card{ border-left:3px solid var(--accent-alert); background:var(--accent-alert-dim); border-radius:0 12px 12px 0; padding:14px 14px 14px 16px; margin-bottom:12px; }
+  .alert-card .msg-title{ font-family:var(--font-mono); font-size:10px; color:var(--accent-alert); letter-spacing:0.06em; margin-bottom:6px; text-transform:uppercase; }
+  .alert-card p{ font-size:13px; line-height:1.55; }
+  .alert-card .meeting{ margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.08); font-family:var(--font-mono); font-size:11px; color:var(--text-muted); }
+  .alert-card .meeting b{ color:var(--glow); }
+  .empty{ text-align:center; padding:40px 10px; color:var(--text-muted); font-size:12.5px; }
+  .loading-dots span{ display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--accent-alert); margin:0 2px; animation:blink 1.2s infinite; }
+  .loading-dots span:nth-child(2){ animation-delay:.2s; }
+  .loading-dots span:nth-child(3){ animation-delay:.4s; }
+  @keyframes blink{ 0%,80%,100%{opacity:.2;} 40%{opacity:1;} }
+
+  .viewfinder{ position:relative; aspect-ratio:1/1; border-radius:var(--radius); background:#05080F; border:1px solid var(--border); overflow:hidden; margin-bottom:14px; display:flex; align-items:center; justify-content:center; }
+  .vf-corner{ position:absolute; width:26px; height:26px; border:2px solid var(--accent-safe); }
+  .vf-corner.tl{ top:16px; left:16px; border-right:none; border-bottom:none; }
+  .vf-corner.tr{ top:16px; right:16px; border-left:none; border-bottom:none; }
+  .vf-corner.bl{ bottom:16px; left:16px; border-right:none; border-top:none; }
+  .vf-corner.br{ bottom:16px; right:16px; border-left:none; border-top:none; }
+  .vf-scanline{ position:absolute; left:16px; right:16px; height:2px; background:linear-gradient(90deg,transparent,var(--accent-safe),transparent); box-shadow:0 0 10px var(--accent-safe); animation:scanmove 1.8s ease-in-out infinite; }
+  @keyframes scanmove{ 0%,100%{ top:16px; } 50%{ top:calc(100% - 18px); } }
+  .vf-target{ width:120px; height:120px; background:#fff; border-radius:8px; display:grid; grid-template-columns:repeat(9,1fr); grid-template-rows:repeat(9,1fr); padding:8px; gap:2px; opacity:0.9; }
+  .vf-target div{ background:#05080F; }
+  .vf-target div.off{ background:transparent; }
+  .vf-caption{ font-family:var(--font-mono); font-size:11px; color:var(--text-muted); text-align:center; margin-bottom:14px; }
+  .badge-row{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .badge{ font-family:var(--font-mono); font-size:9.5px; letter-spacing:0.04em; padding:5px 8px; border-radius:7px; display:flex; align-items:center; gap:5px; }
+  .badge.tsafe{ background:rgba(94,234,212,0.1); color:var(--glow); border:1px solid rgba(94,234,212,0.3); }
+  .badge.buzz{ background:rgba(255,176,32,0.1); color:var(--accent-warn); border:1px solid rgba(255,176,32,0.3); }
+  .badge.mesh{ background:rgba(255,176,32,0.1); color:var(--accent-warn); border:1px solid rgba(255,176,32,0.3); }
+
+  @media (max-width:760px){ .intro{ display:none; } .phone{ width:100%; max-width:380px; } }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="intro">
+    <div class="eyebrow">FindMyPeople AI</div>
+    <h1>Reunite fast, even when networks fail.</h1>
+    <p>This is a working prototype: the group session, live map, and SOS flow are simulated, but the emergency message and meeting-point recommendation below are generated live by Claude, not scripted.</p>
+    <p style="color:var(--text-muted)">Tap <b style="color:var(--accent-alert)">Create Group</b> to walk through onboarding, or jump straight to the map and press the SOS button.</p>
+  </div>
+  <div class="phone">
+    <div class="screen" id="screen"></div>
+  </div>
+</div>
+
+<script>
+const state = {
+  view: 'onboard', // onboard | map | group | alerts
+  groupCreated: false,
+  offline: false,
+  members: [
+    { id:1, name:'You', isYou:true, x:52, y:58, battery:18, color:'#FF4757' },
+    { id:2, name:'Aditi', x:34, y:38, battery:76, color:'#2DD4BF' },
+    { id:3, name:'Rohan', x:71, y:30, battery:54, color:'#5EEAD4' },
+    { id:4, name:'Meera', x:63, y:76, battery:88, color:'#2DD4BF' },
+  ],
+  sosActive: false,
+  sosLoading: false,
+  meetingPoint: null,
+  alerts: [],
+  gps: { active:false, lat:null, lng:null, accuracy:null, watchId:null, error:null }
+};
+
+function toggleRealGPS(){
+  if(state.gps.active){
+    if(state.gps.watchId!=null) navigator.geolocation.clearWatch(state.gps.watchId);
+    state.gps = { active:false, lat:null, lng:null, accuracy:null, watchId:null, error:null };
+    render();
+    return;
+  }
+  if(!navigator.geolocation){
+    state.gps.error = 'Geolocation not supported in this browser.';
+    render();
+    return;
+  }
+  const watchId = navigator.geolocation.watchPosition(
+    (pos)=>{
+      state.gps.active = true;
+      state.gps.lat = pos.coords.latitude;
+      state.gps.lng = pos.coords.longitude;
+      state.gps.accuracy = Math.round(pos.coords.accuracy);
+      state.gps.error = null;
+      if(state.view==='map') render();
+    },
+    (err)=>{
+      state.gps.error = err.message || 'Location permission denied.';
+      render();
+    },
+    { enableHighAccuracy:true, maximumAge:5000, timeout:10000 }
+  );
+  state.gps.watchId = watchId;
+}
+
+function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+function nearestToYou(){
+  const you = state.members.find(m=>m.isYou);
+  const others = state.members.filter(m=>!m.isYou);
+  others.sort((a,b)=>dist(you,a)-dist(you,b));
+  return others[0];
+}
+
+function qrPattern(){
+  let cells = '';
+  const seed = [1,0,1,1,0,0,1,0,1];
+  for(let r=0;r<9;r++){
+    for(let c=0;c<9;c++){
+      const corner = (r<3&&c<3)||(r<3&&c>5)||(r>5&&c<3);
+      const on = corner ? ((r+c)%3!==0) : (((r*3+c*7+seed[(r+c)%9])%3)===0);
+      cells += `<div class="${on?'':'off'}"></div>`;
+    }
+  }
+  return cells;
+}
+
+function renderMapSVG(highlightSOS){
+  const you = state.members.find(m=>m.isYou);
+  const near = nearestToYou();
+  let pins = '';
+  state.members.forEach(m=>{
+    const isYouLost = m.isYou && (state.sosActive || state.sosLoading);
+    const ringColor = isYouLost ? 'var(--accent-alert)' : 'var(--accent-safe)';
+    pins += `
+      <g>
+        ${isYouLost ? `<circle cx="${m.x*2.6}" cy="${m.y*2.6}" r="10" fill="none" stroke="${'#FF4757'}" stroke-width="1.5" opacity="0.6">
+          <animate attributeName="r" from="10" to="46" dur="2.2s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" from="0.6" to="0" dur="2.2s" repeatCount="indefinite"/>
+        </circle>` : ''}
+        <circle cx="${m.x*2.6}" cy="${m.y*2.6}" r="9" fill="${m.color}" stroke="${isYouLost?'#FF4757':'#0A0F1A'}" stroke-width="2"/>
+        <text x="${m.x*2.6}" y="${m.y*2.6+22}" text-anchor="middle" class="pin-label">${m.name}</text>
+      </g>`;
+  });
+
+  let meetingPin = '';
+  if(state.meetingPoint){
+    const mx = (you.x + near.x)/2 * 2.6 + 14;
+    const my = (you.y + near.y)/2 * 2.6 - 14;
+    meetingPin = `
+      <line x1="${you.x*2.6}" y1="${you.y*2.6}" x2="${mx}" y2="${my}" stroke="#FFB020" stroke-width="1.2" stroke-dasharray="3,3"/>
+      <line x1="${near.x*2.6}" y1="${near.y*2.6}" x2="${mx}" y2="${my}" stroke="#FFB020" stroke-width="1.2" stroke-dasharray="3,3"/>
+      <path d="M${mx} ${my-9} l2.6 5.4 6 0.8 -4.3 4.2 1 6 -5.3 -2.8 -5.3 2.8 1 -6 -4.3 -4.2 6 -0.8 z" fill="#FFB020"/>
+    `;
+  }
+
+  return `
+  <svg viewBox="0 0 260 190" xmlns="http://www.w3.org/2000/svg">
+    <rect width="260" height="190" fill="#111A2C"/>
+    <path d="M20 20 h220 v150 h-220 z" fill="none" stroke="#2A3752" stroke-width="1" stroke-dasharray="4,4"/>
+    <text x="30" y="16" class="pin-label" fill="#8B96A8">GATE 1</text>
+    <text x="220" y="16" class="pin-label" fill="#8B96A8" text-anchor="end">GATE 2</text>
+    <text x="30" y="182" class="pin-label" fill="#8B96A8">GATE 3</text>
+    <text x="220" y="182" class="pin-label" fill="#8B96A8" text-anchor="end">GATE 4</text>
+    <circle cx="130" cy="95" r="22" fill="#1B2540" stroke="#2A3752"/>
+    <text x="130" y="99" text-anchor="middle" class="pin-label" fill="#8B96A8">STAGE</text>
+    ${meetingPin}
+    ${pins}
+  </svg>`;
+}
+
+function screenChrome(inner, activeNav){
+  const you = state.members.find(m=>m.isYou);
+  return `
+    <div class="statusbar">
+      <span>09:41</span>
+      <span class="netbadge ${state.offline?'offline':''}"><span class="netdot"></span>${state.offline? 'Offline · mesh relay' : 'Connected'}</span>
+    </div>
+    ${inner}
+    <div class="nav">
+      ${navBtn('map','Map',activeNav)}
+      ${navBtn('group','Group',activeNav)}
+      ${navBtn('scan','Scan SOS',activeNav)}
+      ${navBtn('alerts','Alerts',activeNav, state.alerts.length)}
+    </div>
+  `;
+}
+
+function navBtn(key,label,active,badge){
+  return `<button class="${active===key?'active':''}" onclick="setView('${key}')">
+    <span style="position:relative;">●${badge?`<span style="position:absolute;top:-6px;right:-8px;background:var(--accent-alert);color:#fff;border-radius:50%;width:14px;height:14px;font-size:8px;display:flex;align-items:center;justify-content:center;">${badge}</span>`:''}</span>
+    ${label}
+  </button>`;
+}
+
+function render(){
+  const el = document.getElementById('screen');
+  if(state.view==='onboard') el.innerHTML = renderOnboard();
+  else if(state.view==='map') el.innerHTML = renderMap();
+  else if(state.view==='group') el.innerHTML = renderGroup();
+  else if(state.view==='scan') el.innerHTML = renderScan();
+  else if(state.view==='alerts') el.innerHTML = renderAlerts();
+}
+
+function renderOnboard(){
+  if(!state.groupCreated){
+    return `
+      <div class="topbar"><h2>FindMyPeople</h2></div>
+      <div class="content">
+        <div class="card qr-wrap">
+          <div class="qr">${qrPattern()}</div>
+          <div class="qr-caption">SCAN TO JOIN · "SUNBURST FESTIVAL"</div>
+        </div>
+        <button class="btn btn-primary" onclick="createGroup()">Create Group Session</button>
+        <div style="height:10px"></div>
+        <button class="btn btn-ghost" onclick="setView('map')">Join with a code instead</button>
+      </div>`;
+  }
+  return renderGroupIntoMap();
+}
+
+function createGroup(){
+  state.groupCreated = true;
+  render();
+  setTimeout(()=>{ setView('map'); }, 900);
+}
+
+function renderGroupIntoMap(){
+  return `
+    <div class="topbar"><h2>Group created</h2></div>
+    <div class="content">
+      <div class="card" style="text-align:center;">
+        <div style="font-family:var(--font-mono);font-size:11px;color:var(--accent-safe);margin-bottom:6px;">✓ 3 MEMBERS JOINED</div>
+        <p style="font-size:12.5px;color:var(--text-muted)">Aditi, Rohan and Meera scanned in. Opening the live map…</p>
+      </div>
+    </div>`;
+}
+
+function setView(v){
+  state.view = v;
+  render();
+}
+
+function renderMap(){
+  const near = nearestToYou();
+  const you = state.members.find(m=>m.isYou);
+  const d = (dist(you,near)*0.18).toFixed(1); // fake km scale
+  const eta = Math.max(1, Math.round(dist(you,near)*0.6));
+
+  const inner = `
+    <div class="topbar">
+      <div>
+        <h2>Live Map</h2>
+        <div class="grouptag">Sunburst Festival · 4 members</div>
+      </div>
+      <button class="btn-ghost" style="border-radius:10px;padding:6px 10px;font-family:var(--font-mono);font-size:10px;" onclick="toggleOffline()">${state.offline?'Go online':'Simulate offline'}</button>
+    </div>
+    <div class="content">
+      <div class="map-wrap">${renderMapSVG()}</div>
+      <div class="card" style="padding-top:12px;padding-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${state.gps.active||state.gps.error?'8px':'0'};">
+          <span style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-muted);">Device GPS (real)</span>
+          <button class="btn-ghost" style="border-radius:8px;padding:5px 10px;font-family:var(--font-mono);font-size:10px;" onclick="toggleRealGPS()">${state.gps.active?'Stop':'Enable'}</button>
+        </div>
+        ${state.gps.active ? `
+          <div class="readout"><span>Latitude</span><b>${state.gps.lat.toFixed(5)}</b></div>
+          <div class="readout"><span>Longitude</span><b>${state.gps.lng.toFixed(5)}</b></div>
+          <div class="readout"><span>Accuracy</span><b>±${state.gps.accuracy} m</b></div>
+        ` : ''}
+        ${state.gps.error ? `<div style="font-family:var(--font-mono);font-size:10.5px;color:var(--accent-alert);">${state.gps.error}</div>` : ''}
+      </div>
+      <div class="card" style="padding-top:12px;padding-bottom:6px;">
+        <div class="readout"><span>Nearest member</span><b>${near.name}</b></div>
+        <div class="readout"><span>Distance</span><b>${d} km</b></div>
+        <div class="readout"><span>Est. arrival</span><b>~${eta} min</b></div>
+        <div class="readout"><span>Your battery</span><b>${you.battery}%</b></div>
+      </div>
+      ${state.sosLoading ? loadingCard() : ''}
+      ${(state.sosActive && state.alerts[0]) ? alertCardHTML(state.alerts[0], true) : ''}
+    </div>
+    <div class="sos-dock"><button class="sos-btn" onclick="openSOSModal()">I'M LOST<br>SOS</button></div>
+    <div class="modal-backdrop" id="sosModal">
+      <div class="modal">
+        <h3>Send SOS as You?</h3>
+        <p>This buzzes your device, shares your live location, battery and last movement with your group, generates an actionable AI alert, and relays it to T-SAFE (govt. safety network) where available.</p>
+        <div class="row">
+          <button class="btn btn-ghost" onclick="closeSOSModal()">Cancel</button>
+          <button class="btn btn-primary" style="background:var(--accent-alert);color:#fff;" onclick="triggerSOS('You')">Confirm SOS</button>
+        </div>
+      </div>
+    </div>
+  `;
+  return screenChrome(inner,'map');
+}
+
+function loadingCard(){
+  return `<div class="alert-card">
+    <div class="msg-title">Broadcasting</div>
+    <p>Asking Claude to generate your emergency update<span class="loading-dots"><span></span><span></span><span></span></span></p>
+  </div>`;
+}
+
+function alertCardHTML(alert, compact){
+  return `<div class="alert-card">
+    <div class="msg-title">Smart SOS · ${alert.time}</div>
+    <p>${alert.message}</p>
+    ${alert.meetingPoint ? `<div class="meeting">Recommended meeting point: <b>${alert.meetingPoint}</b>${alert.eta?` · everyone can reach it in ~${alert.eta} min`:''}</div>` : ''}
+    <div class="badge-row">
+      <span class="badge buzz">📳 Device buzzed</span>
+      ${alert.offlinePath ? `<span class="badge mesh">📡 Sent via mesh relay</span>` : ''}
+      <span class="badge tsafe">🛡 T-SAFE ${alert.offlinePath ? 'queued · will sync online' : 'notified · Ref ' + alert.tsafeRef}</span>
+    </div>
+  </div>`;
+}
+
+function renderScan(){
+  const target = state.scanning ? 'Meera' : null;
+  const inner = `
+    <div class="topbar"><h2>Scan to Activate</h2></div>
+    <div class="content">
+      <div class="viewfinder">
+        <div class="vf-corner tl"></div><div class="vf-corner tr"></div>
+        <div class="vf-corner bl"></div><div class="vf-corner br"></div>
+        <div class="vf-scanline"></div>
+        <div class="vf-target">${qrPattern()}</div>
+      </div>
+      <div class="vf-caption">Point the camera at a FindMyPeople wristband, badge, or lanyard QR to trigger SOS for that person — no need to unlock their phone.</div>
+      <button class="btn btn-primary" onclick="simulateScan()">Simulate Scan (Demo)</button>
+      <p style="font-size:11.5px;color:var(--text-muted);margin-top:10px;line-height:1.5;">Real use case: a stranger, staff member, or security guard finds a lost child or elderly person, scans their wristband, and instantly notifies the family group and T-SAFE — without needing the app themselves.</p>
+    </div>
+  `;
+  return screenChrome(inner,'scan');
+}
+
+function simulateScan(){
+  // simulate a bystander scanning Meera's wristband QR
+  triggerSOS('Meera');
+}
+
+function renderGroup(){
+  const rows = state.members.map(m=>`
+    <div class="member-row">
+      <div class="avatar" style="background:${m.color}">${m.name[0]}</div>
+      <div class="member-meta">
+        <div class="name">${m.name}${m.isYou?' (you)':''}</div>
+        <div class="sub">last update: just now</div>
+      </div>
+      <div class="battery">${m.battery}%</div>
+    </div>
+  `).join('');
+  const inner = `
+    <div class="topbar"><h2>Group</h2><div class="grouptag">Sunburst Festival</div></div>
+    <div class="content">
+      <div class="card">${rows}</div>
+      <button class="btn btn-ghost" onclick="alert('In the full app this opens native share sheet to invite more people.')">+ Invite member</button>
+    </div>
+  `;
+  return screenChrome(inner,'group');
+}
+
+function renderAlerts(){
+  const inner = `
+    <div class="topbar"><h2>Alerts</h2></div>
+    <div class="content">
+      ${state.alerts.length===0 ? `<div class="empty">No alerts yet.<br>SOS broadcasts will appear here.</div>` : state.alerts.map(a=>alertCardHTML(a)).join('')}
+    </div>
+  `;
+  return screenChrome(inner,'alerts');
+}
+
+function toggleOffline(){
+  state.offline = !state.offline;
+  render();
+}
+
+function openSOSModal(){
+  document.getElementById('sosModal').classList.add('show');
+}
+function closeSOSModal(){
+  document.getElementById('sosModal').classList.remove('show');
+}
+
+async function triggerSOS(memberName){
+  closeSOSModal();
+  const targetName = memberName || 'You';
+  state.sosLoading = true;
+  render();
+  setView('map');
+
+  // haptic buzz on the triggering device — real emergency signal, not simulated
+  if(navigator.vibrate){ navigator.vibrate([200,100,200,100,400]); }
+
+  const you = state.members.find(m=>m.name===targetName) || state.members.find(m=>m.isYou);
+  const near = state.members.filter(m=>m.name!==you.name).sort((a,b)=>dist(you,a)-dist(you,b))[0];
+  const etaMin = Math.max(1, Math.round(dist(you,near)*0.6));
+  const tsafeRef = 'TS-' + Math.floor(100000 + Math.random()*899999);
+
+  function pushAlert(message, meetingPoint, eta, offlinePath){
+    state.meetingPoint = meetingPoint;
+    state.alerts.unshift({
+      time: 'just now',
+      message,
+      meetingPoint,
+      eta,
+      tsafeRef,
+      offlinePath
+    });
+    state.sosLoading = false;
+    state.sosActive = true;
+    render();
+  }
+
+  if(state.offline){
+    // Honest behavior: no internet means no API call either. Fall back to a
+    // local template message and simulate relay over nearby devices (BLE mesh),
+    // then a queued sync to T-SAFE once connectivity returns.
+    await new Promise(r=>setTimeout(r, 1600)); // simulate mesh hop delay
+    const msg = `${you.name} was last detected near Gate 3 and has been stationary for 5 minutes. Battery is at ${you.battery}%. ${near.name} is the closest group member and can reach ${you.name==='You'?'them':you.name} in about ${etaMin} minutes. Relayed via nearby devices — no internet connection available.`;
+    pushAlert(msg, 'Gate 3 information kiosk', etaMin, true);
+    return;
+  }
+
+  const contextPrompt = `You are the notification engine for a crowd-safety app called FindMyPeople AI. An SOS has just been triggered for a group member at a festival — either by them pressing "I'm Lost", or by a bystander scanning their wristband QR code. Generate the emergency alert their group will see.
+
+Context:
+- Lost person: ${you.name}
+- Location: near Gate 3, close to the main stage, Sunburst Festival grounds
+- Stationary for: 5 minutes
+- Battery level: ${you.battery}%
+- Nearest group member: ${near.name}, estimated ${etaMin} minutes away on foot
+- Network condition: online
+
+Respond with ONLY raw JSON, no markdown fences, no preamble, in this exact shape:
+{"message": "a 2-3 sentence actionable alert written for the group, in third person, mentioning location, time stationary, battery, and who's closest with their ETA", "meetingPoint": "a short specific-sounding meeting spot name near the stated location", "eta": ${etaMin}}`;
+
+  try{
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        messages: [{ role: "user", content: contextPrompt }]
+      })
+    });
+    const data = await response.json();
+    const textBlock = (data.content || []).find(b=>b.type==='text');
+    let parsed;
+    try{
+      const clean = (textBlock?.text || '').replace(/```json|```/g,'').trim();
+      parsed = JSON.parse(clean);
+    }catch(e){
+      parsed = { message: textBlock?.text || `${you.name} was last seen near Gate 3, stationary for 5 minutes, battery at ${you.battery}%. ${near.name} is closest and can arrive in about ${etaMin} minutes.`, meetingPoint: "Gate 3 information kiosk", eta: etaMin };
+    }
+    pushAlert(parsed.message, parsed.meetingPoint, parsed.eta || etaMin, false);
+  }catch(err){
+    pushAlert(`${you.name} was last seen near Gate 3, stationary for 5 minutes, battery at ${you.battery}%. ${near.name} is closest and can arrive in about ${etaMin} minutes. (Fallback message — AI call failed: ${err.message})`, 'Gate 3 information kiosk', etaMin, false);
+  }
+}
+
+render();
+
+// Register service worker so the app shell works offline and can be
+// installed to the home screen on Android and iOS.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(() => {
+      // Fails silently if opened from file:// or an unsupported context —
+      // the app still works, it just won't be installable in that case.
+    });
+  });
+}
+</script>
+</body>
+</html>
