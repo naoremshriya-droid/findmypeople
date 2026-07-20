@@ -181,6 +181,15 @@
   .badge.mesh{ background:rgba(255,176,32,0.1); color:var(--accent-warn); border:1px solid rgba(255,176,32,0.3); }
 
   @media (max-width:760px){ .intro{ display:none; } .phone{ width:100%; max-width:380px; } }
+
+  /* On a real phone (or the installed PWA), fill the actual screen —
+     the decorative phone-frame mockup is only for the desktop chat demo. */
+  @media (max-width:480px), (display-mode: standalone){
+    body{ padding:0; align-items:stretch; }
+    .stage{ gap:0; }
+    .phone{ width:100vw; height:100dvh; max-width:none; border:none; border-radius:0; box-shadow:none; padding:0; }
+    .screen{ border-radius:0; }
+  }
 </style>
 </head>
 <body>
@@ -196,11 +205,102 @@
   </div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script>
+// ============================================================
+// PASTE YOUR FIREBASE CONFIG HERE (from Firebase Console →
+// Project Settings → your web app). The app runs in local demo
+// mode with mock data until you do this — nothing else breaks.
+// ============================================================
+const FIREBASE_CONFIG = {
+  apiKey: "YOUR_FIREBASE_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT-default-rtdb.REGION.firebasedatabase.app",
+  projectId: "YOUR_PROJECT",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+const FIREBASE_READY = FIREBASE_CONFIG.apiKey !== "YOUR_FIREBASE_API_KEY";
+let db = null;
+if (FIREBASE_READY) {
+  firebase.initializeApp(FIREBASE_CONFIG);
+  db = firebase.database();
+}
+
+const MY_ID = 'm_' + Math.random().toString(36).slice(2, 9);
+const MOCK_COLORS = ['#2DD4BF', '#5EEAD4', '#FFB020', '#7DD3FC', '#C4B5FD'];
+function colorForId(id){ let h=0; for(const c of id) h=(h*31+c.charCodeAt(0))>>>0; return MOCK_COLORS[h % MOCK_COLORS.length]; }
+
+let seenAlertKeys = new Set();
+let alertsListenerAttached = false;
+
+function geoTransform(members){
+  // Convert real lat/lng into the stylized 0-100 map grid, anchored on
+  // whichever member joined first so every device computes the same layout.
+  const withGeo = members.filter(m => typeof m.lat === 'number');
+  if (withGeo.length === 0) return members;
+  const origin = withGeo.slice().sort((a,b)=> (a.joinedAt||0)-(b.joinedAt||0))[0];
+  const SCALE = 45000; // ~ meters-to-map-units at small festival-ground scale
+  return members.map(m=>{
+    if (typeof m.lat !== 'number') return m; // no GPS yet, keep default position
+    const x = 50 + (m.lng - origin.lng) * SCALE;
+    const y = 50 - (m.lat - origin.lat) * SCALE;
+    return { ...m, x: Math.max(6, Math.min(94, x)), y: Math.max(6, Math.min(94, y)) };
+  });
+}
+
+function attachGroupListeners(groupId){
+  db.ref(`groups/${groupId}/members`).on('value', (snap)=>{
+    const data = snap.val() || {};
+    const members = Object.entries(data).map(([id, m])=>({
+      id, name: m.name || 'Guest', isYou: id === MY_ID,
+      x: m.x ?? 50, y: m.y ?? 50, lat: m.lat, lng: m.lng,
+      battery: m.battery ?? 100, color: colorForId(id), joinedAt: m.joinedAt || 0
+    }));
+    state.members = geoTransform(members);
+    if (state.view === 'map' || state.view === 'group') render();
+  });
+
+  // Seed already-known alert keys first so we only buzz for genuinely new ones.
+  db.ref(`groups/${groupId}/alerts`).once('value').then((snap)=>{
+    const data = snap.val() || {};
+    Object.keys(data).forEach(k=>seenAlertKeys.add(k));
+    if (alertsListenerAttached) return;
+    alertsListenerAttached = true;
+    db.ref(`groups/${groupId}/alerts`).on('child_added', (snap)=>{
+      if (seenAlertKeys.has(snap.key)) return;
+      seenAlertKeys.add(snap.key);
+      const a = snap.val();
+      if (navigator.vibrate) navigator.vibrate([200,100,200,100,400]);
+      state.alerts.unshift(a);
+      state.sosActive = true;
+      state.meetingPoint = a.meetingPoint;
+      render();
+    });
+  });
+}
+
+function writeMyLocation(){
+  if (!FIREBASE_READY || !state.groupId) return;
+  const me = state.members.find(m=>m.isYou) || {};
+  const payload = { name: state.myName, battery: me.battery ?? 88, joinedAt: me.joinedAt || Date.now() };
+  if (state.gps.active) { payload.lat = state.gps.lat; payload.lng = state.gps.lng; }
+  db.ref(`groups/${state.groupId}/members/${MY_ID}`).update(payload);
+}
+</script>
 <script>
 const state = {
-  view: 'onboard', // onboard | map | group | alerts
+  view: 'onboard', // onboard | map | group | scan | alerts
   groupCreated: false,
   offline: false,
+  groupId: null,
+  myName: 'You',
+  joinCodeInput: '',
+  joinError: null,
   members: [
     { id:1, name:'You', isYou:true, x:52, y:58, battery:18, color:'#FF4757' },
     { id:2, name:'Aditi', x:34, y:38, battery:76, color:'#2DD4BF' },
@@ -211,7 +311,12 @@ const state = {
   sosLoading: false,
   meetingPoint: null,
   alerts: [],
-  gps: { active:false, lat:null, lng:null, accuracy:null, watchId:null, error:null }
+  gps: { active:false, lat:null, lng:null, accuracy:null, watchId:null, error:null },
+  cameraActive: false,
+  cameraError: null,
+  scanStatus: null,
+  wristbandFor: null,
+  contactStatus: null
 };
 
 function toggleRealGPS(){
@@ -233,6 +338,7 @@ function toggleRealGPS(){
       state.gps.lng = pos.coords.longitude;
       state.gps.accuracy = Math.round(pos.coords.accuracy);
       state.gps.error = null;
+      writeMyLocation();
       if(state.view==='map') render();
     },
     (err)=>{
@@ -344,10 +450,15 @@ function render(){
 }
 
 function renderOnboard(){
-  if(!state.groupCreated){
+  if(state.groupCreated) return renderGroupIntoMap();
+
+  if(!FIREBASE_READY){
     return `
       <div class="topbar"><h2>FindMyPeople</h2></div>
       <div class="content">
+        <div class="card" style="background:rgba(255,176,32,0.08);border-color:rgba(255,176,32,0.3);">
+          <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--accent-warn);">LOCAL DEMO MODE — paste your Firebase config at the top of the script to enable real cross-device sync.</div>
+        </div>
         <div class="card qr-wrap">
           <div class="qr">${qrPattern()}</div>
           <div class="qr-caption">SCAN TO JOIN · "SUNBURST FESTIVAL"</div>
@@ -357,7 +468,58 @@ function renderOnboard(){
         <button class="btn btn-ghost" onclick="setView('map')">Join with a code instead</button>
       </div>`;
   }
-  return renderGroupIntoMap();
+
+  return `
+    <div class="topbar"><h2>FindMyPeople</h2></div>
+    <div class="content">
+      <div class="card">
+        <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--accent-safe);margin-bottom:8px;">YOUR NAME</div>
+        <input id="nameInput" type="text" value="${state.myName}" placeholder="e.g. Priya"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text);font-family:var(--font-body);font-size:14px;"
+          onchange="state.myName=this.value||'Guest'">
+      </div>
+      <button class="btn btn-primary" onclick="createGroupReal()">Create Group Session</button>
+      <div style="height:10px"></div>
+      <div class="card">
+        <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-muted);margin-bottom:8px;">HAVE A CODE?</div>
+        <div style="display:flex;gap:8px;">
+          <input id="joinInput" type="text" maxlength="6" placeholder="ABC123" value="${state.joinCodeInput}"
+            style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;color:var(--text);font-family:var(--font-mono);font-size:14px;text-transform:uppercase;"
+            oninput="state.joinCodeInput=this.value.toUpperCase()">
+          <button class="btn btn-ghost" style="width:auto;padding:10px 16px;" onclick="joinGroupReal()">Join</button>
+        </div>
+        ${state.joinError ? `<div style="font-family:var(--font-mono);font-size:10.5px;color:var(--accent-alert);margin-top:8px;">${state.joinError}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function createGroupReal(){
+  const code = Math.random().toString(36).slice(2,8).toUpperCase();
+  state.groupId = code;
+  state.myName = document.getElementById('nameInput')?.value || state.myName || 'You';
+  const me = { name: state.myName, battery: 88, joinedAt: Date.now() };
+  db.ref(`groups/${code}/members/${MY_ID}`).set(me).then(()=>{
+    attachGroupListeners(code);
+    state.groupCreated = true;
+    state.pendingQR = code;
+    render();
+  });
+}
+
+function joinGroupReal(){
+  const code = (document.getElementById('joinInput')?.value || state.joinCodeInput || '').toUpperCase().trim();
+  if(!code){ state.joinError = 'Enter a group code.'; render(); return; }
+  db.ref(`groups/${code}/members`).once('value').then((snap)=>{
+    if(!snap.exists()){ state.joinError = 'No group found with that code.'; render(); return; }
+    state.groupId = code;
+    state.myName = document.getElementById('nameInput')?.value || state.myName || 'Guest';
+    const me = { name: state.myName, battery: 91, joinedAt: Date.now() };
+    db.ref(`groups/${code}/members/${MY_ID}`).set(me).then(()=>{
+      attachGroupListeners(code);
+      state.joinError = null;
+      setView('map');
+    });
+  });
 }
 
 function createGroup(){
@@ -367,6 +529,27 @@ function createGroup(){
 }
 
 function renderGroupIntoMap(){
+  if(state.groupId){
+    let qrSvg = '';
+    try{
+      const joinUrl = `${location.origin}${location.pathname}?join=${state.groupId}`;
+      const qr = qrcode(0, 'M');
+      qr.addData(joinUrl);
+      qr.make();
+      qrSvg = qr.createSvgTag({ scalable: true });
+    }catch(e){ qrSvg = ''; }
+    return `
+      <div class="topbar"><h2>Group live</h2></div>
+      <div class="content">
+        <div class="card" style="text-align:center;">
+          <div style="font-family:var(--font-mono);font-size:11px;color:var(--accent-safe);margin-bottom:10px;">✓ REAL-TIME SYNC ACTIVE</div>
+          <div style="background:#fff;border-radius:10px;padding:12px;display:inline-block;">${qrSvg}</div>
+          <div style="font-family:var(--font-mono);font-size:18px;letter-spacing:0.15em;color:var(--text);margin-top:10px;">${state.groupId}</div>
+          <p style="font-size:12px;color:var(--text-muted);margin-top:6px;">Share this code or QR with your group — anyone who scans or enters it joins this live session on their own phone.</p>
+        </div>
+        <button class="btn btn-primary" onclick="setView('map')">Open Live Map</button>
+      </div>`;
+  }
   return `
     <div class="topbar"><h2>Group created</h2></div>
     <div class="content">
@@ -392,7 +575,7 @@ function renderMap(){
     <div class="topbar">
       <div>
         <h2>Live Map</h2>
-        <div class="grouptag">Sunburst Festival · 4 members</div>
+        <div class="grouptag">${state.groupId ? 'Group ' + state.groupId : 'Sunburst Festival'} · ${state.members.length} member${state.members.length===1?'':'s'}${FIREBASE_READY && state.groupId ? ' · live' : ''}</div>
       </div>
       <button class="btn-ghost" style="border-radius:10px;padding:6px 10px;font-family:var(--font-mono);font-size:10px;" onclick="toggleOffline()">${state.offline?'Go online':'Simulate offline'}</button>
     </div>
@@ -455,18 +638,28 @@ function alertCardHTML(alert, compact){
 }
 
 function renderScan(){
-  const target = state.scanning ? 'Meera' : null;
   const inner = `
     <div class="topbar"><h2>Scan to Activate</h2></div>
     <div class="content">
-      <div class="viewfinder">
-        <div class="vf-corner tl"></div><div class="vf-corner tr"></div>
-        <div class="vf-corner bl"></div><div class="vf-corner br"></div>
-        <div class="vf-scanline"></div>
-        <div class="vf-target">${qrPattern()}</div>
+      <div class="viewfinder" id="viewfinderBox">
+        ${state.cameraActive ? `
+          <video id="scanVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;"></video>
+          <canvas id="scanCanvas" style="display:none;"></canvas>
+          <div class="vf-corner tl"></div><div class="vf-corner tr"></div>
+          <div class="vf-corner bl"></div><div class="vf-corner br"></div>
+          <div class="vf-scanline"></div>
+        ` : `
+          <div class="vf-corner tl"></div><div class="vf-corner tr"></div>
+          <div class="vf-corner bl"></div><div class="vf-corner br"></div>
+          <div class="vf-target">${qrPattern()}</div>
+        `}
       </div>
-      <div class="vf-caption">Point the camera at a FindMyPeople wristband, badge, or lanyard QR to trigger SOS for that person — no need to unlock their phone.</div>
-      <button class="btn btn-primary" onclick="simulateScan()">Simulate Scan (Demo)</button>
+      <div class="vf-caption">Point the camera at a FindMyPeople wristband, badge, group QR, or another phone's screen.</div>
+      ${!state.cameraActive ? `<button class="btn btn-primary" onclick="startCameraScan()">Start Camera</button>` : `<button class="btn btn-ghost" style="background:var(--accent-alert);color:#fff;border:none;" onclick="stopCameraScan()">Stop Camera</button>`}
+      ${state.cameraError ? `<div style="font-family:var(--font-mono);font-size:10.5px;color:var(--accent-alert);margin-top:8px;">${state.cameraError}</div>` : ''}
+      ${state.scanStatus ? `<div style="font-family:var(--font-mono);font-size:10.5px;color:var(--accent-safe);margin-top:8px;">${state.scanStatus}</div>` : ''}
+      <div style="height:10px"></div>
+      <button class="btn btn-ghost" onclick="simulateScan()">Simulate Scan (no camera)</button>
       <p style="font-size:11.5px;color:var(--text-muted);margin-top:10px;line-height:1.5;">Real use case: a stranger, staff member, or security guard finds a lost child or elderly person, scans their wristband, and instantly notifies the family group and T-SAFE — without needing the app themselves.</p>
     </div>
   `;
@@ -478,6 +671,108 @@ function simulateScan(){
   triggerSOS('Meera');
 }
 
+let scanStream = null;
+let scanRAF = null;
+
+function startCameraScan(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    state.cameraError = 'Camera access not supported in this browser.';
+    render();
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+    .then((stream)=>{
+      scanStream = stream;
+      state.cameraActive = true;
+      state.cameraError = null;
+      state.scanStatus = null;
+      render();
+      // render() just rebuilt the DOM, so (re)attach the live stream now.
+      const video = document.getElementById('scanVideo');
+      video.srcObject = stream;
+      video.play();
+      scanRAF = requestAnimationFrame(scanFrame);
+    })
+    .catch((err)=>{
+      state.cameraError = 'Camera permission denied or unavailable (' + err.message + '). Note: this preview panel may block camera access — try on your deployed HTTPS site.';
+      render();
+    });
+}
+
+function stopCameraScan(){
+  if(scanRAF) cancelAnimationFrame(scanRAF);
+  if(scanStream) scanStream.getTracks().forEach(t=>t.stop());
+  scanStream = null;
+  state.cameraActive = false;
+  render();
+}
+
+function scanFrame(){
+  if(!state.cameraActive || state.view!=='scan') return;
+  const video = document.getElementById('scanVideo');
+  const canvas = document.getElementById('scanCanvas');
+  if(video && canvas && video.readyState === video.HAVE_ENOUGH_DATA){
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height);
+    if(code && code.data){
+      handleDecodedQR(code.data);
+      return; // stop the loop; handleDecodedQR takes over
+    }
+  }
+  scanRAF = requestAnimationFrame(scanFrame);
+}
+
+function handleDecodedQR(text){
+  stopCameraScan();
+  let url;
+  try{ url = new URL(text); }catch(e){
+    state.scanStatus = null;
+    state.cameraError = 'QR recognized but not a FindMyPeople code.';
+    render();
+    return;
+  }
+  const joinCode = url.searchParams.get('join');
+  const sosName = url.searchParams.get('sosName');
+  if(!joinCode){
+    state.cameraError = 'QR recognized but not a FindMyPeople code.';
+    render();
+    return;
+  }
+  if(!FIREBASE_READY){
+    state.cameraError = 'Firebase not configured — connect it to join real groups by QR.';
+    render();
+    return;
+  }
+  state.scanStatus = 'QR recognized · joining group ' + joinCode + '…';
+  render();
+  db.ref(`groups/${joinCode}/members`).once('value').then((snap)=>{
+    if(!snap.exists()){
+      state.cameraError = 'No group found for that QR code.';
+      state.scanStatus = null;
+      render();
+      return;
+    }
+    const already = state.groupId === joinCode;
+    const finish = ()=>{
+      state.groupId = joinCode;
+      attachGroupListeners(joinCode);
+      if(sosName){
+        state.scanStatus = 'Joined · triggering SOS for ' + sosName + '…';
+        render();
+        setTimeout(()=>triggerSOS(sosName), 400);
+      } else {
+        setView('map');
+      }
+    };
+    if(already){ finish(); return; }
+    db.ref(`groups/${joinCode}/members/${MY_ID}`).set({ name: state.myName, battery: 90, joinedAt: Date.now() }).then(finish);
+  });
+}
+
 function renderGroup(){
   const rows = state.members.map(m=>`
     <div class="member-row">
@@ -487,16 +782,84 @@ function renderGroup(){
         <div class="sub">last update: just now</div>
       </div>
       <div class="battery">${m.battery}%</div>
+      ${state.groupId ? `<button class="btn-ghost" style="width:auto;padding:5px 9px;border-radius:8px;font-family:var(--font-mono);font-size:9.5px;" onclick="showWristband('${m.name.replace(/'/g,"")}')">QR</button>` : ''}
     </div>
   `).join('');
+
+  let wristbandCard = '';
+  if(state.wristbandFor){
+    let qrSvg = '';
+    try{
+      const url = `${location.origin}${location.pathname}?join=${state.groupId}&sosName=${encodeURIComponent(state.wristbandFor)}`;
+      const qr = qrcode(0, 'M');
+      qr.addData(url);
+      qr.make();
+      qrSvg = qr.createSvgTag({ scalable: true });
+    }catch(e){}
+    wristbandCard = `
+      <div class="card" style="text-align:center;">
+        <div style="font-family:var(--font-mono);font-size:10.5px;color:var(--accent-safe);margin-bottom:8px;">WRISTBAND QR · ${state.wristbandFor}</div>
+        <div style="background:#fff;border-radius:10px;padding:10px;display:inline-block;">${qrSvg}</div>
+        <p style="font-size:11.5px;color:var(--text-muted);margin-top:8px;">Anyone who scans this on the Scan tab instantly triggers an SOS for ${state.wristbandFor} — no phone unlock needed.</p>
+        <button class="btn btn-ghost" style="margin-top:8px;" onclick="state.wristbandFor=null;render();">Close</button>
+      </div>`;
+  }
+
   const inner = `
-    <div class="topbar"><h2>Group</h2><div class="grouptag">Sunburst Festival</div></div>
+    <div class="topbar"><h2>Group</h2><div class="grouptag">${state.groupId ? 'Group ' + state.groupId : 'Sunburst Festival'}</div></div>
     <div class="content">
       <div class="card">${rows}</div>
-      <button class="btn btn-ghost" onclick="alert('In the full app this opens native share sheet to invite more people.')">+ Invite member</button>
+      ${wristbandCard}
+      <button class="btn btn-ghost" onclick="addContact()">+ Add Contact</button>
+      ${state.contactStatus ? `<div style="font-family:var(--font-mono);font-size:10.5px;color:var(--text-muted);margin-top:8px;text-align:center;">${state.contactStatus}</div>` : ''}
     </div>
   `;
   return screenChrome(inner,'group');
+}
+
+function showWristband(name){
+  state.wristbandFor = name;
+  render();
+}
+
+async function addContact(){
+  state.contactStatus = null;
+  // Contact Picker API — real device contacts, Android Chrome only (secure
+  // context required). No equivalent exists on iOS Safari or desktop.
+  if('contacts' in navigator && 'ContactsManager' in window){
+    try{
+      const contacts = await navigator.contacts.select(['name','tel'], { multiple: true });
+      if(contacts.length){
+        const names = contacts.map(c=>(c.name && c.name[0]) || 'Contact').join(', ');
+        state.contactStatus = `Selected: ${names}. In production, an SMS invite with your join link would be sent to their number automatically.`;
+      } else {
+        state.contactStatus = 'No contact selected.';
+      }
+    }catch(err){
+      state.contactStatus = 'Contact picker cancelled or blocked: ' + err.message;
+    }
+    render();
+    return;
+  }
+  // Fallback: share the join link directly (Web Share API), or copy it.
+  const joinUrl = state.groupId ? `${location.origin}${location.pathname}?join=${state.groupId}` : null;
+  if(!joinUrl){
+    state.contactStatus = 'Create or join a real group first to generate an invite link.';
+    render();
+    return;
+  }
+  if(navigator.share){
+    try{
+      await navigator.share({ title: 'Join my FindMyPeople group', text: 'Join my safety group for the event:', url: joinUrl });
+      state.contactStatus = 'Invite shared.';
+    }catch(err){ state.contactStatus = 'Share cancelled.'; }
+  } else if(navigator.clipboard){
+    await navigator.clipboard.writeText(joinUrl);
+    state.contactStatus = 'Contact picker isn\'t available on this device — invite link copied instead, paste it in any messaging app.';
+  } else {
+    state.contactStatus = `Share this link: ${joinUrl}`;
+  }
+  render();
 }
 
 function renderAlerts(){
@@ -537,15 +900,15 @@ async function triggerSOS(memberName){
   const tsafeRef = 'TS-' + Math.floor(100000 + Math.random()*899999);
 
   function pushAlert(message, meetingPoint, eta, offlinePath){
-    state.meetingPoint = meetingPoint;
-    state.alerts.unshift({
-      time: 'just now',
-      message,
-      meetingPoint,
-      eta,
-      tsafeRef,
-      offlinePath
-    });
+    const alertPayload = { time: 'just now', message, meetingPoint, eta, tsafeRef, offlinePath, at: Date.now() };
+    if (FIREBASE_READY && state.groupId) {
+      // Write once; every device in the group (including this one) receives
+      // it back through the real-time listener and buzzes independently.
+      db.ref(`groups/${state.groupId}/alerts`).push(alertPayload);
+    } else {
+      state.meetingPoint = meetingPoint;
+      state.alerts.unshift(alertPayload);
+    }
     state.sosLoading = false;
     state.sosActive = true;
     render();
@@ -600,6 +963,26 @@ Respond with ONLY raw JSON, no markdown fences, no preamble, in this exact shape
 }
 
 render();
+
+// If opened via a scanned QR link (?join=CODE), auto-join that group.
+if (FIREBASE_READY) {
+  const params = new URLSearchParams(location.search);
+  const joinParam = params.get('join');
+  if (joinParam) {
+    state.joinCodeInput = joinParam.toUpperCase();
+    db.ref(`groups/${state.joinCodeInput}/members`).once('value').then((snap)=>{
+      if (snap.exists()) {
+        const nm = prompt('Joining group ' + state.joinCodeInput + '. Enter your name:', state.myName) || state.myName;
+        state.myName = nm;
+        db.ref(`groups/${state.joinCodeInput}/members/${MY_ID}`).set({ name: nm, battery: 90, joinedAt: Date.now() }).then(()=>{
+          state.groupId = state.joinCodeInput;
+          attachGroupListeners(state.groupId);
+          setView('map');
+        });
+      }
+    });
+  }
+}
 
 // Register service worker so the app shell works offline and can be
 // installed to the home screen on Android and iOS.
